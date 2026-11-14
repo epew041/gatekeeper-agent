@@ -1,0 +1,17 @@
+{
+  "author": "",
+  "dependencies": {
+    "snarkjs": "^0.7.6"
+  },
+  "description": "Original Proof Gatekeeper agent for the zkVerify Agent Games: HMAC-signed endpoint, deterministic trap checks, local Groth16 proofs (snarkjs), Kurier submission.",
+  "keywords": [],
+  "license": "ISC",
+  "main": "src/index.js",
+  "name": "gatekeeper-agent",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-force-exit test/*.test.js"
+  },
+  "type": "module",
+  "version": "1.0.0"
+}
