@@ -70,7 +70,11 @@ test("REAL: a second task reusing an approved proof ref is rejected as PROOF_REU
   assert.ok(second.proof_tx);
 });
 
-test("REAL: Kurier success path attaches the finalized txHash as proof_tx (mocked Kurier)", async () => {
+test("REAL: Kurier runs in the background — answer returns at once with proof, no proof_tx (mocked Kurier)", async () => {
+  let resolveFinished;
+  const finished = new Promise((resolve) => {
+    resolveFinished = resolve;
+  });
   const calls = [];
   const fakeKurier = {
     async submitProof({ proof, publicSignals, vkHash }) {
@@ -79,7 +83,9 @@ test("REAL: Kurier success path attaches the finalized txHash as proof_tx (mocke
     },
     async waitForFinalized(jobId) {
       assert.equal(jobId, "job-1");
-      return { status: "Finalized", txHash: "0xkuriertx", jobId };
+      const out = { status: "Finalized", txHash: "0xkuriertx", jobId };
+      resolveFinished(out);
+      return out;
     },
   };
   const agent = createAgent({
@@ -89,8 +95,32 @@ test("REAL: Kurier success path attaches the finalized txHash as proof_tx (mocke
   });
   const res = await agent.handleTask(makeTask());
   assert.equal(res.decision, "APPROVE");
-  assert.equal(res.proof_tx, "0xkuriertx");
+  assert.ok(res.proof);
+  assert.equal(res.proof_tx, undefined);
+  // The background chain still runs to completion after the answer.
+  const final = await finished;
+  assert.equal(final.txHash, "0xkuriertx");
   assert.equal(calls[0].vkHash, VK_HASH);
+});
+
+test("REAL: a Kurier that never resolves never delays the answer", async () => {
+  const fakeKurier = {
+    async submitProof() {
+      return { jobId: "job-hang" };
+    },
+    async waitForFinalized() {
+      return new Promise(() => {});
+    },
+  };
+  const agent = createAgent({
+    config: testConfig(),
+    seenSet: new SeenSet(null),
+    kurierClient: fakeKurier,
+  });
+  const res = await agent.handleTask(makeTask());
+  assert.equal(res.decision, "APPROVE");
+  assert.ok(res.proof);
+  assert.equal(res.proof_tx, undefined);
 });
 
 test("REAL: Kurier failure never blocks the answer (decision + proof still returned)", async () => {

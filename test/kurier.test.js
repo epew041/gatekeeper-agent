@@ -148,3 +148,26 @@ test("HTTP errors surface as KurierError", async () => {
   const client = clientWith(mock);
   await assert.rejects(() => client.registerVk({}), KurierError);
 });
+
+test("a hung Kurier request aborts at requestTimeoutMs", async () => {
+  const fetchImpl = async (url, options) => {
+    assert.ok(options.signal, "an AbortSignal must be passed to fetch");
+    await new Promise((_, reject) => {
+      options.signal.addEventListener("abort", () => {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  };
+  const client = new KurierClient({
+    apiUrl: "https://api.kurier.xyz/api/v1",
+    apiKey: "TEST_KEY",
+    fetchImpl,
+    requestTimeoutMs: 20,
+  });
+  await assert.rejects(
+    () => client.submitProof({ proof: {}, publicSignals: [], vkHash: VK_HASH }),
+    KurierError
+  );
+});
