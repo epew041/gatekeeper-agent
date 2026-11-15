@@ -81,11 +81,11 @@ dari eksekusi lokal. Tidak ada hasil yang dikarang.
 
 ### Server HTTP sungguhan (`test/server.test.js`, 4)
 
-- health check answers 200 with a signed body
+- health check answers 200 with signed protocol-v1 JSON
 - unsigned and wrongly signed task POSTs are rejected 401
 - valid signed task returns APPROVE with proof and a valid response signature;
   retry returns the byte-identical response
-- signed preflight-style POST without task fields answers OK
+- signed preflight-style POST without task fields answers protocol-v1 JSON
 
 ## Smoke test server sungguhan (entry point `src/index.js`)
 
@@ -93,7 +93,7 @@ Dijalankan terpisah dari suite, dengan secret uji via environment:
 
 ```
 NO_SECRET_EXIT: 1 | stderr: FATAL: AGENT_HMAC_SECRET is not set (or still a placeholder). ...
-HEALTH: 200 {"status":"ok","service":"gatekeeper-agent","kurier":"disabled"}
+HEALTH: 200 {"ok":true,"protocolVersion":"v1"}
 TASK: 200 APPROVE VALID_CONDITION | proof? true | pubSignals: 13 | ms: 1382
 BAD_SIG: 401 {"error":"bad_signature"}
 ```
@@ -117,7 +117,11 @@ Dilakukan terhadap artefak resmi dengan snarkjs, sebelum kode ditulis
 - TIDAK ada panggilan Kurier/mainnet live (tidak ada API key; dilarang
   oleh tugas). Semua uji Kurier memakai mock fetch.
 - TIDAK ada health check / preflight / practice / ronde skor langsung
-  dari platform (butuh deploy + registrasi dari HP + secret asli).
+  dari platform yang LOLOS (butuh deploy + registrasi dari HP + secret
+  asli). Preflight live pertama (15 Nov 2026, 07:47 WIB) GAGAL karena
+  bentuk respons lama; bentuk protocol-v1 di atas TERVERIFIKASI dari
+  pesan error preflight platform itu sendiri, kode diperbaiki, dan uji
+  ulang menunggu deploy.
 - TIDAK ada pengujian beban (load) atau konkurensi tinggi.
 - Encoding `taskId`, format tanda HMAC, dan field `proof`/`public_signals`
   pada respons adalah pilihan yang ditandai TO-VERIFY di README.md dan

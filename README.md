@@ -45,7 +45,7 @@ bisa menghasilkan proof. Detail empiris circuit ada di
 
 ```
 POST / (atau /agent)                GET /, /agent, /health
-  │ raw body → verifikasi HMAC        │ → 200 { status: "ok" }
+  │ raw body → verifikasi HMAC        │ → 200 signed {"ok":true,"protocolVersion":"v1"}
   ▼                                     ▼
 server.js ──► agent.js ──► decide.js (cek murni, tanpa I/O)
                  │              │
@@ -154,7 +154,9 @@ BELUM diuji (butuh deploy + registrasi + API key, di luar jangkauan build
 lokal ini):
 
 - Health check, signed preflight, dan practice task LANGSUNG dari
-  platform.
+  platform yang lolos. Preflight live pertama (15 Nov 2026) gagal karena
+  bentuk respons lama; bentuk protocol-v1 sudah diperbaiki dari pesan
+  error platform, uji ulang menunggu deploy.
 - Ronde skor langsung, termasuk beban dan perilaku retry platform.
 - Pengiriman Kurier live sampai `Finalized` dan penerimaan `proof_tx`.
 - Bentuk respons: field `proof`/`public_signals` mengikuti konvensi yang
@@ -163,9 +165,11 @@ lokal ini):
   `{decision, reason_code, proof_tx}`. Jika platform menolak field
   tambahan, sesuaikan di `src/agent.js` (satu tempat).
 - Algoritma/encoding HMAC: diasumsikan HMAC-SHA256 (hex untuk respons).
-  Verifikasi dibuat toleran (hex/base64, prefix opsional); penandatanganan
-  respons adalah tebakan konvensi yang paling umum. Jika preflight gagal
-  karena tanda, ubah HANYA `src/hmac.js`.
+  Verifikasi dibuat toleran (hex/base64, prefix opsional). Bentuk BODY
+  respons preflight/health TERVERIFIKASI dari pesan error preflight
+  platform (15 Nov 2026): `{"ok":true,"protocolVersion":"v1"}` bertanda.
+  Encoding tanda respons (hex) masih asumsi; jika preflight gagal karena
+  tanda, ubah HANYA `src/hmac.js`.
 - Encoding `taskId` dari string (mis. `gk_24_9d1`) menjadi field element:
   dipakai SHA-256 deterministik. Proof tetap valid untuk nilai apa pun,
   tetapi kecocokan silang platform (jika ada) tidak terverifikasi. Ubah
