@@ -45,7 +45,13 @@ function extractVkHash(data) {
 }
 
 export class KurierClient {
-  constructor({ apiUrl, apiKey, fetchImpl = fetch, pollIntervalMs = 5000 }) {
+  constructor({
+    apiUrl,
+    apiKey,
+    fetchImpl = fetch,
+    pollIntervalMs = 5000,
+    requestTimeoutMs = 30000,
+  }) {
     if (!apiUrl || !apiKey) {
       throw new KurierError("Kurier client requires apiUrl and apiKey");
     }
@@ -53,6 +59,9 @@ export class KurierClient {
     this.apiKey = apiKey;
     this.fetchImpl = fetchImpl;
     this.pollIntervalMs = pollIntervalMs;
+    // Per-request ceiling: a hung Kurier call must fail instead of hanging
+    // forever. 0 disables the timeout (tests may pass a small value).
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async #request(method, path, body) {
@@ -66,6 +75,10 @@ export class KurierClient {
         method,
         headers: body ? { "content-type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
+        signal:
+          this.requestTimeoutMs > 0
+            ? AbortSignal.timeout(this.requestTimeoutMs)
+            : undefined,
       });
     } catch (cause) {
       throw new KurierError(`Kurier request failed: ${cause.message}`, cause);

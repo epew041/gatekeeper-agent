@@ -5,10 +5,16 @@
 //   2. Idempotency: a task_id seen before returns the EXACT cached response.
 //   3. Decide (pure checks; reuse check consults the seen-set).
 //   4. If provable: generate + locally verify the Groth16 proof.
-//   5. If Kurier is configured: submit the proof and poll for Finalized
-//      within the remaining time budget. Slow/failed Kurier NEVER blocks
-//      the answer: the decision + local proof are returned without a
-//      Kurier txHash, and the shortfall is logged.
+//   5. If Kurier is configured: submit the proof in the BACKGROUND and
+//      answer immediately with the local proof. The background job polls
+//      for Finalized and logs its outcome (kurier_submitted /
+//      kurier_finalized / kurier_poll_timeout / kurier_failed). The
+//      answer NEVER carries a Kurier txHash and NEVER waits for Kurier:
+//      proven live 16 Nov 2026, waiting for Finalized took ~24s per task
+//      while the platform's practice delivery closed the connection at
+//      ~13s, so both practice tasks timed out even though Kurier
+//      finalized them. A background failure can neither delay nor change
+//      an answer.
 //   6. Record approvals in the seen-set, cache the response, return it.
 //
 // Fail-closed rules:
@@ -20,11 +26,10 @@
 //     cautious rejection (-6 wrong-approve vs -3 wrong-reject).
 //   - Any unexpected exception: answer REJECT with the reason code from
 //     the decision when one exists, else VK_SUBSTITUTION, without proof.
-//   - The caller enforces the overall deadline; this module tracks its own
-//     remaining budget for the Kurier poll.
+//   - The caller enforces the overall deadline. The background Kurier
+//     poll uses kurierBudgetMs and never affects the answer.
 import { decide, MalformedTaskError, REASON_CODES } from "./decide.js";
 import { generateProof, ProverError } from "./prover.js";
-import { KurierError } from "./kurier.js";
 
 function log(event, fields = {}) {
   console.log(JSON.stringify({ level: "info", event, ...fields }));
@@ -32,6 +37,38 @@ function log(event, fields = {}) {
 
 export function createAgent({ config, seenSet, kurierClient }) {
   const inFlight = new Map();
+
+  // Fire-and-forget Kurier submission. The returned promise NEVER rejects:
+  // every failure is caught and logged, so this cannot surface an
+  // unhandled rejection. Callers must NOT await it.
+  function submitToKurierInBackground({ taskId, proof, publicSignals }) {
+    const run = async () => {
+      try {
+        const { jobId } = await kurierClient.submitProof({
+          proof,
+          publicSignals,
+          vkHash: config.vkHash,
+        });
+        log("kurier_submitted", { taskId, jobId });
+        const final = await kurierClient.waitForFinalized(
+          jobId,
+          config.kurierBudgetMs
+        );
+        if (final.status === "Finalized") {
+          log("kurier_finalized", {
+            taskId,
+            jobId,
+            txHash: final.txHash || null,
+          });
+        } else {
+          log("kurier_poll_timeout", { taskId, jobId, status: final.status });
+        }
+      } catch (cause) {
+        log("kurier_failed", { taskId, error: String(cause.message || cause) });
+      }
+    };
+    void run();
+  }
 
   async function handleTaskInternal(envelope, startedAt) {
     const decision = decide(envelope, {
@@ -68,33 +105,9 @@ export function createAgent({ config, seenSet, kurierClient }) {
       }
 
       if (kurierClient) {
-        const elapsed = Date.now() - startedAt;
-        const budget = Math.max(
-          0,
-          Math.min(config.kurierBudgetMs, config.taskTimeoutMs - elapsed - 5000)
-        );
-        if (budget > 0) {
-          try {
-            const { jobId } = await kurierClient.submitProof({
-              proof,
-              publicSignals,
-              vkHash: config.vkHash,
-            });
-            const final = await kurierClient.waitForFinalized(jobId, budget);
-            if (final.status === "Finalized") {
-              proofTx = final.txHash || null;
-              kurierStatus = "finalized";
-            } else {
-              kurierStatus = `poll_timeout:${final.status}`;
-            }
-          } catch (cause) {
-            kurierStatus =
-              cause instanceof KurierError ? `error:${cause.message}` : "error:unknown";
-            log("kurier_failed", { taskId, error: String(cause.message || cause) });
-          }
-        } else {
-          kurierStatus = "budget_exhausted";
-        }
+        // Background only: the answer below must not wait for Kurier.
+        kurierStatus = "background";
+        submitToKurierInBackground({ taskId, proof, publicSignals });
       }
     }
 

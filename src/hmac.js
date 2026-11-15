@@ -7,14 +7,13 @@
 //     response body;
 //   - the secret is a 32-byte random value shown exactly once at registration.
 //
-// TO-VERIFY (practice mode / preflight): the docs do NOT state the hash
-// algorithm or the header encoding. This module assumes HMAC-SHA256, the
-// overwhelmingly common convention for this header pattern, and verifies
-// TOLERANTLY (hex or base64, with or without a "sha256=" prefix) so a
-// different-but-equivalent encoding still passes. Responses are signed as
-// lowercase hex without a prefix. If preflight rejects the signature, the
-// ONLY place to change is `sign()` below and the accepted forms in
-// `decodeSignature()`. Never log the secret or a full signature value.
+// VERIFIED live 15 Nov 2026: the platform's signed preflight PASSED
+// (Healthy, 204ms) and a practice task PASSED with this exact scheme, so
+// HMAC-SHA256 with lowercase-hex response signatures is confirmed, not
+// assumed. Verification stays TOLERANT (hex or base64, with or without a
+// "sha256=" prefix) so a different-but-equivalent request encoding still
+// passes. Responses are signed as lowercase hex without a prefix.
+// Never log the secret or a full signature value.
 import crypto from "node:crypto";
 
 export function hmacSha256Hex(secret, bodyBuffer) {
