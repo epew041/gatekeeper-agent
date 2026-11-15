@@ -17,10 +17,16 @@ kondisi pembayaran berbasis proof. Agent ini:
    bersangkutan gagal, memakai HANYA reason code yang didokumentasikan.
 4. Membuat proof Groth16 secara lokal dengan snarkjs dari circuit resmi,
    lalu memverifikasi proof itu secara lokal sebelum menjawab.
-5. Jika Kurier dikonfigurasi: mengirim proof ke Kurier dan menunggu status
-   `Finalized` dalam batas waktu; `txHash` final dipakai sebagai
-   `proof_tx`. Kurier yang lambat/gagal TIDAK PERNAH memblokir jawaban:
-   keputusan + proof lokal tetap dikirim.
+5. Jika Kurier dikonfigurasi: proof dikirim ke Kurier DI LATAR
+   BELAKANG — jawaban TIDAK menunggu Kurier dan TIDAK membawa
+   `proof_tx`. Hasil Kurier dicatat di log (`kurier_submitted` /
+   `kurier_finalized` / `kurier_failed` / `kurier_poll_timeout`).
+   Alasannya terbukti live 16 Nov 2026: menunggu `Finalized` memakan
+   ~24 detik per task, sementara delivery practice platform menutup
+   koneksi di ~13 detik, sehingga kedua practice task itu timeout
+   meskipun Kurier memfinalisasi keduanya. Mode latar belakang
+   mengembalikan jawaban secepat tanpa Kurier (~0,3 detik di ronde 3)
+   sambil proof tetap terkonfirmasi on-chain.
 6. Mencatat proof ref dari APPROVE ke seen-set (file `seen-set.json`) agar
    pemakaian ulang terdeteksi, dan mengembalikan respons yang IDENTIK
    untuk retry dengan `task_id` yang sama.
@@ -63,7 +69,7 @@ Node (`http`, `crypto`, `fs`, `fetch`).
 ```bash
 cd gatekeeper-agent
 npm install
-npm test            # 46 test; lihat TEST_REPORT.md
+npm test            # 48 test; lihat TEST_REPORT.md
 cp .env.example .env
 # isi AGENT_HMAC_SECRET di .env dengan secret UJI (bukan secret asli!)
 npm start           # jalan di http://localhost:3000
@@ -95,7 +101,7 @@ memenuhi syarat di atas; agent ini tidak terikat pada satu penyedia.
 | Variabel | Wajib? | Keterangan |
 |---|---|---|
 | `AGENT_HMAC_SECRET` | Ya | Secret 32-byte dari dashboard, tampil SEKALI saat registrasi agent. |
-| `KURIER_API_KEY` | Dianjurkan | API key Kurier mainnet. Tanpa ini agent tetap menjawab dengan proof lokal, tetapi tanpa `proof_tx` on-chain. |
+| `KURIER_API_KEY` | Dianjurkan | API key Kurier mainnet. Tanpa ini agent tetap menjawab dengan proof lokal. Dengan ini proof juga dikirim ke Kurier di latar belakang (jawaban tetap tanpa `proof_tx`; hasil Kurier hanya di log). |
 | `VK_HASH` | Tidak | Default: hash resmi dari `/api/circuit-info`. |
 | `KURIER_API_URL` | Tidak | Default: `https://api.kurier.xyz/api/v1` (mainnet, dari docs resmi). |
 | `PORT` | Tidak | Default `3000`; hosting biasanya mengatur sendiri. |
@@ -146,30 +152,31 @@ Sudah diuji secara lokal (bukti di `TEST_REPORT.md`):
 - Proof Groth16 ASLI dari circuit resmi + verifikasi lokal OK (approve
   dan reject); bit keputusan yang berbohong tidak bisa membuktikan.
 - Kurier: bentuk request/response persis sesuai docs, diuji dengan mock
-  (TIDAK ada panggilan live — tidak ada API key).
+  (TIDAK ada panggilan live — tidak ada API key); Kurier latar belakang
+  yang tidak pernah selesai TIDAK menunda jawaban; request Kurier yang
+  menggantung dibatalkan pada batas waktu per-request.
 - Server HTTP sungguhan: health 200, 401 untuk tanda salah, jawaban
-  bertanda yang valid.
+  bertanda yang valid; simulasi Kurier lambat 15 detik: jawaban HTTP 200
+  + proof dalam 1,6 detik, finalisasi latar belakang tetap selesai.
 
-BELUM diuji (butuh deploy + registrasi + API key, di luar jangkauan build
-lokal ini):
+Sudah TERVERIFIKASI live dari platform (15–16 Nov 2026):
 
-- Health check, signed preflight, dan practice task LANGSUNG dari
-  platform yang lolos. Preflight live pertama (15 Nov 2026) gagal karena
-  bentuk respons lama; bentuk protocol-v1 sudah diperbaiki dari pesan
-  error platform, uji ulang menunggu deploy.
-- Ronde skor langsung, termasuk beban dan perilaku retry platform.
-- Pengiriman Kurier live sampai `Finalized` dan penerimaan `proof_tx`.
-- Bentuk respons: field `proof`/`public_signals` mengikuti konvensi yang
-  didokumentasikan untuk Steal the VFY + perintah `/build` ("include the
-  proof in your response"); bentuk Gatekeeper yang ditampilkan resmi hanya
-  `{decision, reason_code, proof_tx}`. Jika platform menolak field
-  tambahan, sesuaikan di `src/agent.js` (satu tempat).
-- Algoritma/encoding HMAC: diasumsikan HMAC-SHA256 (hex untuk respons).
-  Verifikasi dibuat toleran (hex/base64, prefix opsional). Bentuk BODY
-  respons preflight/health TERVERIFIKASI dari pesan error preflight
-  platform (15 Nov 2026): `{"ok":true,"protocolVersion":"v1"}` bertanda.
-  Encoding tanda respons (hex) masih asumsi; jika preflight gagal karena
-  tanda, ubah HANYA `src/hmac.js`.
+- Signed preflight LOLOS 15 Nov 2026 (Healthy, 204ms) — bentuk respons
+  protocol-v1 DAN encoding tanda hex untuk respons terverifikasi.
+- Practice task LOLOS 15 Nov 2026 (trap AMOUNT_OVERFLOW ditolak dengan
+  benar, proof VERIFIED, 2.060ms).
+- Ronde skor 3: 8/8 task terjawab, 0 timeout, 80,0 poin — field
+  `proof`/`public_signals` pada respons diterima platform.
+- Pengiriman Kurier live sampai `Finalized` TERAMATI 16 Nov 2026 (2
+  practice task, ~24 detik per task, log `kurier: finalized`); tetapi
+  menunggu finalisasi membuat delivery practice timeout di ~13 detik —
+  itulah alasan mode latar belakang di atas.
+
+BELUM diuji (jujur):
+
+- Apakah counter "verified proofs / confirmed on-chain" di dashboard
+  naik ketika proof terfinalisasi lewat Kurier latar belakang — ronde 4
+  (mulai 16 Nov 2026, 17.30 WIB) adalah uji live pertamanya.
 - Encoding `taskId` dari string (mis. `gk_24_9d1`) menjadi field element:
   dipakai SHA-256 deterministik. Proof tetap valid untuk nilai apa pun,
   tetapi kecocokan silang platform (jika ada) tidak terverifikasi. Ubah

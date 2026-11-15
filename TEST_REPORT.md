@@ -1,19 +1,32 @@
 # TEST REPORT — gatekeeper-agent
 
-Tanggal: 15 November 2026 (WIB). Semua hasil di bawah adalah output NYATA
-dari eksekusi lokal. Tidak ada hasil yang dikarang.
+Tanggal: 15 November 2026 (WIB), ditambah addendum 16 November 2026.
+Semua hasil di bawah adalah output NYATA dari eksekusi lokal. Tidak ada
+hasil yang dikarang.
 
 ## Ringkasan
 
 - Perintah: `npm test` → `node --test --test-force-exit test/*.test.js`
-- Hasil: **46 test, 46 lolos, 0 gagal** (durasi 9,07 detik).
+- Hasil awal (15 Nov): **46 test, 46 lolos, 0 gagal** (durasi 9,07 detik).
+- Hasil setelah perbaikan Kurier latar belakang (16 Nov): **48 test,
+  48 lolos, 0 gagal** (durasi 10,53 detik).
 - Node v24.22.1, snarkjs 0.7.6.
 - Satu kegagalan ditemukan dan diperbaiki selama pengembangan (bukan
   disembunyikan): parser field menolak prefix hex `0X` kapital — diperbaiki
   di `src/encode.js`; dan satu test mock Kurier kekurangan respons skrip —
   diperbaiki di test-nya. Setelah perbaikan, seluruh suite hijau.
+- Perbaikan 16 Nov: Kurier dipindah ke latar belakang setelah 2 practice
+  task live timeout di ~13 detik karena jawaban menunggu `Finalized`
+  (~24 detik), meskipun Kurier memfinalisasi keduanya. Perubahan:
+  `src/agent.js` (submit latar belakang, jawaban tanpa `proof_tx`),
+  `src/kurier.js` (batas waktu 30 detik per request), test baru di
+  `test/agent.test.js` dan `test/kurier.test.js`, dan pembaruan jujur di
+  README + `src/hmac.js` (encoding HMAC-SHA256/hex terverifikasi preflight
+  15 Nov). Simulasi server sungguhan dengan Kurier lambat 15 detik:
+  jawaban HTTP 200 + proof dalam 1,6 detik, finalisasi latar belakang
+  tetap selesai (lihat "Simulasi Kurier lambat" di bawah).
 
-## Daftar test (46)
+## Daftar test (48)
 
 ### HMAC (`test/hmac.test.js`, 7)
 
@@ -59,7 +72,7 @@ dari eksekusi lokal. Tidak ada hasil yang dikarang.
 - decision bit inconsistent with checks cannot prove (circuit assert →
   ProverError)
 
-### Kurier — mock fetch, TANPA jaringan (`test/kurier.test.js`, 8)
+### Kurier — mock fetch, TANPA jaringan (`test/kurier.test.js`, 9)
 
 - register-vk uses the documented URL and body, returns vkHash
 - register-vk tolerates an already-registered uniq_vk_hash response
@@ -69,14 +82,17 @@ dari eksekusi lokal. Tidak ada hasil yang dikarang.
 - polling a Failed job throws
 - polling times out cleanly (timedOut, not an error)
 - HTTP errors surface as KurierError
+- a hung Kurier request aborts at requestTimeoutMs (baru, 16 Nov)
 
-### Orkestrasi agent (`test/agent.test.js`, 5)
+### Orkestrasi agent (`test/agent.test.js`, 6)
 
 - approve returns decision + locally verified proof, no proof_tx without Kurier
 - retry of the same task_id returns the identical cached response
 - a second task reusing an approved proof ref is rejected as PROOF_REUSED
   without proof
-- Kurier success path attaches the finalized txHash as proof_tx (mocked Kurier)
+- Kurier runs in the background — answer returns at once with proof, no
+  proof_tx; the background chain still completes (mocked Kurier; diubah, 16 Nov)
+- a Kurier that never resolves never delays the answer (baru, 16 Nov)
 - Kurier failure never blocks the answer (decision + proof still returned)
 
 ### Server HTTP sungguhan (`test/server.test.js`, 4)
@@ -112,17 +128,28 @@ Dilakukan terhadap artefak resmi dengan snarkjs, sebelum kode ditulis
   penuh menghasilkan proof yang terverifikasi.
 - Waktu proving lokal: ~0,25–1,7 detik per proof.
 
+## Simulasi Kurier lambat (16 Nov 2026, server sungguhan + Kurier mock 15 detik)
+
+Skrip sekali pakai (bukan bagian repo): server + agent asli, Kurier mock
+yang tidur 15 detik di `submitProof` (lebih lama dari batas ~13 detik yang
+men-timeout-kan practice live). Hasil NYATA:
+
+```
+task_done taskId: gk_test_001 decision: APPROVE reason_code: VALID_CONDITION kurier: background ms: 1567
+status: 200, elapsedMs: 1606, decision: APPROVE, hasProof: true, proof_tx: null
+kurier_submitted taskId: gk_test_001 jobId: job-sim
+background: completed, Finalized, txHash: 0xsimtx, totalMs: 16602
+```
+
+Jawaban HTTP 200 + proof dalam 1,6 detik, sebelum Kurier selesai; rantai
+latar belakang tetap selesai dengan `Finalized` sesudahnya.
+
 ## Yang TIDAK diuji (jujur)
 
-- TIDAK ada panggilan Kurier/mainnet live (tidak ada API key; dilarang
-  oleh tugas). Semua uji Kurier memakai mock fetch.
-- TIDAK ada health check / preflight / practice / ronde skor langsung
-  dari platform yang LOLOS (butuh deploy + registrasi dari HP + secret
-  asli). Preflight live pertama (15 Nov 2026, 07:47 WIB) GAGAL karena
-  bentuk respons lama; bentuk protocol-v1 di atas TERVERIFIKASI dari
-  pesan error preflight platform itu sendiri, kode diperbaiki, dan uji
-  ulang menunggu deploy.
 - TIDAK ada pengujian beban (load) atau konkurensi tinggi.
-- Encoding `taskId`, format tanda HMAC, dan field `proof`/`public_signals`
-  pada respons adalah pilihan yang ditandai TO-VERIFY di README.md dan
-  harus dikonfirmasi lewat practice mode setelah deploy.
+- Encoding `taskId` dan kecocokan silang platform-nya tidak terverifikasi
+  (lihat README.md).
+- Apakah counter "verified proofs / confirmed on-chain" di dashboard naik
+  ketika proof terfinalisasi lewat Kurier latar belakang — ronde 4 adalah
+  uji live pertamanya. Pengiriman Kurier live sampai `Finalized` sendiri
+  SUDAH teramati (2 practice task, 16 Nov 2026, ~24 detik per task).
