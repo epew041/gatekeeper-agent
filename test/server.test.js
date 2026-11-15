@@ -51,12 +51,12 @@ function request(port, { method, path, headers = {}, body = null }) {
   });
 }
 
-test("REAL HTTP: health check answers 200 with a signed body", async () => {
+test("REAL HTTP: health check answers 200 with signed protocol-v1 JSON", async () => {
   const { server, port } = await startTestServer();
   try {
     const res = await request(port, { method: "GET", path: "/health" });
     assert.equal(res.status, 200);
-    assert.equal(JSON.parse(res.body.toString()).status, "ok");
+    assert.equal(res.body.toString(), '{"ok":true,"protocolVersion":"v1"}');
     assert.equal(
       verifySignature(SECRET, res.body, res.headers["x-agent-games-signature"]),
       true
@@ -144,7 +144,7 @@ test("REAL HTTP: valid signed task returns APPROVE with proof and a valid respon
   }
 });
 
-test("REAL HTTP: signed preflight-style POST without task fields answers OK", async () => {
+test("REAL HTTP: signed preflight-style POST without task fields answers protocol-v1 JSON", async () => {
   const { server, port } = await startTestServer();
   try {
     const body = Buffer.from(JSON.stringify({ ping: true }), "utf8");
@@ -158,7 +158,11 @@ test("REAL HTTP: signed preflight-style POST without task fields answers OK", as
       body,
     });
     assert.equal(res.status, 200);
-    assert.equal(JSON.parse(res.body.toString()).status, "ok");
+    assert.equal(res.body.toString(), '{"ok":true,"protocolVersion":"v1"}');
+    assert.equal(
+      verifySignature(SECRET, res.body, res.headers["x-agent-games-signature"]),
+      true
+    );
   } finally {
     server.close();
   }
