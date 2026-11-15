@@ -2,9 +2,16 @@
 //
 // Routing (the platform registers ONE endpoint address, so health and
 // tasks share it):
-//   GET  /, /agent, /health  -> 200 { status: "ok", ... }  (health check)
-//   POST /, /agent           -> task handling (HMAC required)
+//   GET  /, /agent, /health  -> 200 signed {"ok":true,"protocolVersion":"v1"}
+//   POST /, /agent           -> task handling (HMAC required); a signed POST
+//                              without task fields is a preflight probe and
+//                              gets the same signed protocol-v1 JSON
 //   anything else            -> 404
+//
+// The protocol-v1 response shape is VERIFIED from the platform itself: the
+// dashboard preflight error (15 Nov 2026) states the endpoint must return
+// signed protocol-v1 JSON {"ok":true,"protocolVersion":"v1"} with a valid
+// x-agent-games-signature header computed from the HMAC secret.
 //
 // Every response carries x-agent-games-signature over its raw body.
 // Requests are verified against the RAW body BEFORE any JSON parsing, as
@@ -85,11 +92,7 @@ export function createServer({ config, agent }) {
       const isHealthPath = isTaskPath || path === "/health";
 
       if (req.method === "GET" && isHealthPath) {
-        sendSigned(res, 200, {
-          status: "ok",
-          service: "gatekeeper-agent",
-          kurier: config.kurierEnabled ? "enabled" : "disabled",
-        });
+        sendSigned(res, 200, { ok: true, protocolVersion: "v1" });
         return;
       }
       if (req.method === "HEAD" && isHealthPath) {
@@ -127,9 +130,8 @@ export function createServer({ config, agent }) {
       }
 
       // Preflight probe: a signed POST without task fields is answered with
-      // a signed OK instead of an error, so the platform's signed-preflight
-      // handshake can succeed. TO-VERIFY: the exact preflight payload shape
-      // is undocumented; this best-effort branch maximizes compatibility.
+      // the signed protocol-v1 JSON the platform requires (verified from
+      // the dashboard preflight error, 15 Nov 2026), NOT with an error.
       if (
         !envelope ||
         typeof envelope !== "object" ||
@@ -137,7 +139,7 @@ export function createServer({ config, agent }) {
         typeof envelope.task_id !== "string" ||
         !envelope.task_id
       ) {
-        sendSigned(res, 200, { status: "ok", service: "gatekeeper-agent" });
+        sendSigned(res, 200, { ok: true, protocolVersion: "v1" });
         return;
       }
 
